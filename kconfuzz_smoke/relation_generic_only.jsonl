@@ -1,0 +1,1 @@
+{"param":"net/ipv4/tcp_autocorking","param_domain":"ipv4","syzkaller_call":"getsockopt$inet_int","descriptor_domain":"generic"}

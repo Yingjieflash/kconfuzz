@@ -1,0 +1,12 @@
+dir-index /
+
+directory / subdirs:
+ - mm
+
+directory / files:
+ - global_vars.c
+ - refs.c
+ - source0.c
+ - source0.h
+ - source1.c
+ - source2.c

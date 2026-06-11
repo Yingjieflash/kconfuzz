@@ -1,0 +1,28 @@
+{{/*
+Copyright 2025 syzkaller project authors. All rights reserved.
+Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+List of AI jobs page.
+*/}}
+
+<!doctype html>
+<html>
+<head>
+	{{template "head" .Header}}
+	<title>syzbot</title>
+</head>
+<body>
+	{{template "header" .Header}}
+	<form method="GET">
+		<label for="workflow">Workflow:</label>
+		<select name="workflow" onchange="this.form.submit()">
+			{{range $w := .Workflows}}
+				<option value="{{$w}}" {{if eq $w $.CurrentWorkflow}}selected{{end}}>{{$w}}</option>
+			{{end}}
+		</select>
+		<label for="show_aborted" style="margin-left: 20px;">Display aborted jobs:</label>
+		<input type="checkbox" id="show_aborted" name="show_aborted" onchange="this.form.submit()" {{if .ShowAborted}}checked{{end}}> YES
+	</form>
+	{{template "ai_job_list" .Jobs}}
+</body>
+</html>

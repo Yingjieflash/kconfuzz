@@ -1,0 +1,237 @@
+// Copyright 2024 syzkaller project authors. All rights reserved.
+// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+package db
+
+import (
+	"time"
+
+	"cloud.google.com/go/spanner"
+)
+
+type Series struct {
+	ID             string             `spanner:"ID"`
+	ExtID          string             `spanner:"ExtID"`
+	AuthorName     string             `spanner:"AuthorName"`
+	AuthorEmail    string             `spanner:"AuthorEmail"`
+	Title          string             `spanner:"Title"`
+	Link           string             `spanner:"Link"`
+	Version        int64              `spanner:"Version"`
+	BaseCommitHint spanner.NullString `spanner:"BaseCommitHint"`
+	// In LKML patches, there are often hints at the target tree for the patch.
+	SubjectTags []string  `spanner:"SubjectTags"`
+	PublishedAt time.Time `spanner:"PublishedAt"`
+	// TODO: we could ger rid of the field by using slightly more complicated SQL queries.
+	LatestSessionID spanner.NullString `spanner:"LatestSessionID"`
+	Cc              []string           `spanner:"Cc"`
+}
+
+func (s *Series) SetLatestSession(session *Session) {
+	s.LatestSessionID = spanner.NullString{StringVal: session.ID, Valid: true}
+}
+
+type Patch struct {
+	ID       string `spanner:"ID"`
+	Seq      int64  `spanner:"Seq"`
+	SeriesID string `spanner:"SeriesID"`
+	Title    string `spanner:"Title"`
+	Link     string `spanner:"Link"`
+	BodyURI  string `spanner:"BodyURI"`
+}
+
+type Build struct {
+	ID         string             `spanner:"ID"`
+	TreeName   string             `spanner:"TreeName"`
+	TreeURL    string             `spanner:"TreeURL"`
+	CommitHash string             `spanner:"CommitHash"`
+	CommitDate time.Time          `spanner:"CommitDate"`
+	SeriesID   spanner.NullString `spanner:"SeriesID"`
+	JobID      spanner.NullString `spanner:"JobID"`
+	Arch       string             `spanner:"Arch"`
+	ConfigName string             `spanner:"ConfigName"`
+	ConfigURI  string             `spanner:"ConfigURI"`
+	LogURI     string             `spanner:"LogURI"`
+	Status     string             `spanner:"Status"`
+	Compiler   string             `spanner:"Compiler"`
+}
+
+func (b *Build) SetSeriesID(id string) {
+	b.SeriesID = spanner.NullString{StringVal: id, Valid: true}
+}
+
+func (b *Build) SetJobID(id string) {
+	b.JobID = spanner.NullString{StringVal: id, Valid: true}
+}
+
+const (
+	BuildFailed string = "build_failed"
+	//	BuiltNotTested  string = "built"
+	//	BuildTestFailed string = "tests_failed"
+	BuildSuccess string = "success"
+)
+
+type Session struct {
+	ID           string             `spanner:"ID"`
+	SeriesID     string             `spanner:"SeriesID"`
+	CreatedAt    time.Time          `spanner:"CreatedAt"`
+	StartedAt    spanner.NullTime   `spanner:"StartedAt"`
+	FinishedAt   spanner.NullTime   `spanner:"FinishedAt"`
+	SkipReason   spanner.NullString `spanner:"SkipReason"`
+	LogURI       string             `spanner:"LogURI"`
+	TriageLogURI string             `spanner:"TriageLogURI"`
+	Tags         []string           `spanner:"Tags"`
+	JobID        spanner.NullString `spanner:"JobID"`
+	// TODO: to accept more specific fuzzing assignment,
+	// add Triager, BaseRepo, BaseCommit, Config fields.
+}
+
+type SessionStatus string
+
+const (
+	SessionStatusWaiting    SessionStatus = "waiting"
+	SessionStatusInProgress SessionStatus = "in progress"
+	SessionStatusFinished   SessionStatus = "finished"
+	SessionStatusSkipped    SessionStatus = "skipped"
+	// To be used in filters.
+	SessionStatusAny         SessionStatus = ""
+	SessionStatusStepsFailed SessionStatus = "steps_failed"
+)
+
+// It could have been a calculated field in Spanner, but the Go library for Spanner currently
+// does not support read-only fields.
+func (s *Session) Status() SessionStatus {
+	if s.StartedAt.IsNull() {
+		return SessionStatusWaiting
+	} else if s.FinishedAt.IsNull() {
+		return SessionStatusInProgress
+	} else if !s.SkipReason.IsNull() {
+		return SessionStatusSkipped
+	}
+	return SessionStatusFinished
+}
+
+func (s *Session) SetJobID(id string) {
+	s.JobID = spanner.NullString{StringVal: id, Valid: true}
+}
+
+func (s *Session) Duration() time.Duration {
+	if s.FinishedAt.IsNull() {
+		return 0
+	}
+	return s.FinishedAt.Time.Sub(s.StartedAt.Time).Truncate(time.Minute)
+}
+
+func (s *Session) SetStartedAt(t time.Time) {
+	s.StartedAt = spanner.NullTime{Time: t, Valid: true}
+}
+
+func (s *Session) SetFinishedAt(t time.Time) {
+	s.FinishedAt = spanner.NullTime{Time: t, Valid: true}
+}
+
+func (s *Session) SetSkipReason(reason string) {
+	s.SkipReason = spanner.NullString{StringVal: reason, Valid: true}
+}
+
+type SessionTest struct {
+	SessionID           string             `spanner:"SessionID"`
+	BaseBuildID         spanner.NullString `spanner:"BaseBuildID"`
+	PatchedBuildID      spanner.NullString `spanner:"PatchedBuildID"`
+	UpdatedAt           time.Time          `spanner:"UpdatedAt"`
+	TestName            string             `spanner:"TestName"`
+	Result              string             `spanner:"Result"`
+	LogURI              string             `spanner:"LogURI"`
+	ArtifactsArchiveURI string             `spanner:"ArtifactsArchiveURI"`
+}
+
+func (t *SessionTest) AnyBuildID() string {
+	if !t.PatchedBuildID.IsNull() {
+		return t.PatchedBuildID.StringVal
+	}
+	if !t.BaseBuildID.IsNull() {
+		return t.BaseBuildID.StringVal
+	}
+	return ""
+}
+
+type SessionTestStep struct {
+	ID        string             `spanner:"ID"`
+	SessionID string             `spanner:"SessionID"`
+	TestName  string             `spanner:"TestName"`
+	Title     string             `spanner:"Title"`
+	LogURI    string             `spanner:"LogURI"`
+	FindingID spanner.NullString `spanner:"FindingID"`
+	Target    string             `spanner:"Target"`
+	Result    string             `spanner:"Result"`
+	CreatedAt time.Time          `spanner:"CreatedAt"`
+}
+
+type Finding struct {
+	ID              string           `spanner:"ID"`
+	SessionID       string           `spanner:"SessionID"`
+	TestName        string           `spanner:"TestName"`
+	Title           string           `spanner:"Title"`
+	ReportURI       string           `spanner:"ReportURI"`
+	LogURI          string           `spanner:"LogURI"`
+	SyzReproURI     string           `spanner:"SyzReproURI"`
+	SyzReproOptsURI string           `spanner:"SyzReproOptsURI"`
+	CReproURI       string           `spanner:"CReproURI"`
+	InvalidatedAt   spanner.NullTime `spanner:"InvalidatedAt"`
+	CreatedAt       spanner.NullTime `spanner:"CreatedAt"`
+}
+
+func (f *Finding) SetInvalidatedAt(t time.Time) {
+	f.InvalidatedAt = spanner.NullTime{Time: t, Valid: true}
+}
+
+type SessionReport struct {
+	ID         string           `spanner:"ID"`
+	SessionID  string           `spanner:"SessionID"`
+	ReportedAt spanner.NullTime `spanner:"ReportedAt"`
+	Moderation bool             `spanner:"Moderation"`
+	Reporter   string           `spanner:"Reporter"`
+}
+
+func (s *SessionReport) SetReportedAt(t time.Time) {
+	s.ReportedAt = spanner.NullTime{Time: t, Valid: true}
+}
+
+type ReportReply struct {
+	MessageID string    `spanner:"MessageID"`
+	ReportID  string    `spanner:"ReportID"`
+	Time      time.Time `spanner:"Time"`
+}
+
+// BaseFinding collects all crashes observed on the base kernel tree.
+// It will be used to avoid unnecessary bug reproduction attempts.
+type BaseFinding struct {
+	CommitHash string           `spanner:"CommitHash"`
+	CommitDate spanner.NullTime `spanner:"CommitDate"`
+	Config     string           `spanner:"Config"`
+	Arch       string           `spanner:"Arch"`
+	Title      string           `spanner:"Title"`
+}
+
+// SeriesStats stores statistics about a patch series.
+type SeriesStats struct {
+	ID            string    `spanner:"ID"`
+	StatsVersion  string    `spanner:"StatsVersion"`
+	PreventedBugs int64     `spanner:"PreventedBugs"`
+	UpdatedAt     time.Time `spanner:"UpdatedAt"`
+}
+
+const (
+	JobPatchTest = "patch_test"
+)
+
+type Job struct {
+	ID        string    `spanner:"ID"`
+	Type      string    `spanner:"Type"`
+	CreatedAt time.Time `spanner:"CreatedAt"`
+	Reporter  string    `spanner:"Reporter"`
+	User      string    `spanner:"User"`
+	ExtID     string    `spanner:"ExtID"`
+	PatchURI  string    `spanner:"PatchURI"`
+	ReportID  string    `spanner:"ReportID"`
+	Cc        []string  `spanner:"Cc"`
+}

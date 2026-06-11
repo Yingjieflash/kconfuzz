@@ -1,0 +1,38 @@
+{
+  "accurate_root_count": 458,
+  "accurate_root_reason_counts": {
+    "same_depth_leaf_gep_mismatch": 84,
+    "single_global_symbol": 271,
+    "validated_current_root": 103
+  },
+  "accurate_root_var_type_counts": {
+    "FIELD": 187,
+    "SINGLE": 271
+  },
+  "accurate_roots_output": "/home/wang/syzkaller_workdir/config_strategy_workspace/value_domain_workspace/runs/mvp_runnable_pipeline_current/accurate_roots.conservative.jsonl",
+  "active130_value_domain": {
+    "confidence_counts": {
+      "high": 57,
+      "low": 44,
+      "medium": 29
+    },
+    "eligible_count": 127,
+    "final_domain_kind_counts": {
+      "bool_like_candidate": 49,
+      "bool_like_int": 13,
+      "bounded_numeric": 1,
+      "one_way_bool": 2,
+      "strict_bool": 55,
+      "string_unknown": 1,
+      "unbounded_numeric": 9
+    },
+    "final_file": "/home/wang/syzkaller_workdir/config_strategy_workspace/value_domain_workspace/runs/active130_field_root_validation/final_with_rerun13/parameter_value_domains.final.rerun13.jsonl",
+    "high_confidence_count": 57,
+    "high_confidence_eligible_count": 55,
+    "record_count": 130,
+    "with_taint_semantics": 54
+  },
+  "input_ready_roots": "/home/wang/syzkaller_workdir/config_strategy_workspace/value_domain_workspace/runs/field_path_gep_resolver_current_clean/tfuzz_ready_strict_config_root.field_path_gep_corrected.jsonl",
+  "ready_count": 1158,
+  "resolver": "/home/wang/syzkaller_workdir/config_strategy_workspace/value_domain_workspace/runs/field_path_gep_resolver_current_clean/field_path_gep_resolution.jsonl"
+}

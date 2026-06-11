@@ -1,0 +1,230 @@
+{{define "content"}}
+    <main class="container-fluid my-4">
+      <div class="chart-wrapper mb-5" id="processed">
+        <h2 class="h4"><a href="#processed" class="text-decoration-none text-reset">Processed Patch Series (weekly)</a></h2>
+        <p class="text-muted small">How many patch series have been extracted/triaged/built/fuzzed each week.</p>
+        <div id="processed_chart_div" style="width: 100%; height: 400px;"></div>
+        <p class="text-muted small">Click and drag to zoom into a time range. Right-click to reset.</p>
+      </div>
+
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="findings">
+        <h2 class="h4"><a href="#findings" class="text-decoration-none text-reset">Findings (weekly)</a></h2>
+        <p class="text-muted small">How many kernel crashes or kernel build/boot errors have been detected each week.</p>
+        <div id="findings_chart_div" style="width: 100%; height: 400px;"></div>
+        <p class="text-muted small">Click and drag to zoom into a time range. Right-click to reset.</p>
+      </div>
+
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="reports">
+        <h2 class="h4"><a href="#reports" class="text-decoration-none text-reset">Reports (weekly)</a></h2>
+        <p class="text-muted small">How many reports with findings have been published.</p>
+        <div id="reports_chart_div" style="width: 100%; height: 400px;"></div>
+        <p class="text-muted small">Click and drag to zoom into a time range. Right-click to reset.</p>
+
+      </div>
+
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="monthly-stats">
+        <h2 class="h4"><a href="#monthly-stats" class="text-decoration-none text-reset">Monthly Summaries</a></h2>
+        {{if .MonthlyStats.Months}}
+        <table class="table table-striped table-sm" style="max-width: 600px;">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Reports</th>
+              <th>Findings</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .MonthlyStats.Months}}
+            <tr>
+              <td>{{.Date.Format "2006-01"}}</td>
+              <td>{{.Reports}}</td>
+              <td>{{.Findings}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+          <tfoot class="fw-bold">
+            <tr>
+              <td>Total</td>
+              <td>{{.MonthlyStats.Totals.Reports}}</td>
+              <td>{{.MonthlyStats.Totals.Findings}}</td>
+            </tr>
+          </tfoot>
+        </table>
+        {{else}}
+        <p>No data available yet.</p>
+        {{end}}
+      </div>
+
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="jobs-stats">
+        <h2 class="h4"><a href="#jobs-stats" class="text-decoration-none text-reset">Jobs Served Monthly</a></h2>
+        {{if .JobsServed}}
+        <table class="table table-striped table-sm" style="max-width: 600px;">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Jobs Served</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .JobsServed}}
+            <tr>
+              <td>{{.Date.Format "2006-01"}}</td>
+              <td>{{.Count}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p>No data available yet.</p>
+        {{end}}
+      </div>
+
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="wait-time">
+        <h2 class="h4"><a href="#wait-time" class="text-decoration-none text-reset">Wait Time before Fuzzing (avg hours, weekly)</a></h2>
+        <p class="text-muted small">How many hours have passed since the moment the series was published and the moment we started fuzzing it.</p>
+        <div id="avg_wait_chart_div" style="width: 100%; height: 400px;"></div>
+        <p class="text-muted small">Click and drag to zoom into a time range. Right-click to reset.</p>
+      </div>
+
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="distribution">
+        <h2 class="h4"><a href="#distribution" class="text-decoration-none text-reset">Status Distribution (weekly)</a></h2>
+        <p class="text-muted small">
+          <b>Processed:</b> Among the processed series, how many have been actually fuzzed.<br />
+          <b>Skipped:</b> Among the processed series, how many were skipped during triage (e.g. because no proper base commit was found).<br />
+          <b>Some steps skipped:</b> Among the processed series, how often did we skip the fuzzing step (e.g. because the patch/patch series did not modify the code we compile).
+        </p>
+        <div id="distribution_chart_div" style="width: 100%; height: 400px;"></div>
+        <p class="text-muted small">Click and drag to zoom into a time range. Right-click to reset.</p>
+      </div>
+      <hr class="my-4">
+
+      <div class="chart-wrapper mb-4" id="prevented-bugs">
+        <h2 class="h4"><a href="#prevented-bugs" class="text-decoration-none text-reset">Prevented Bugs Statistics (monthly)</a></h2>
+        <p class="text-muted small">
+          How many bugs were found in the early series versions, but not in the final one. Data is aggregated by the month the patch series was published.
+        </p>
+        {{if .PreventedBugs}}
+        <table class="table table-striped table-sm" style="max-width: 600px;">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Series with Prevented Bugs</th>
+              <th>Total Prevented Bugs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .PreventedBugs}}
+            <tr>
+              <td>{{.Date.Format "2006-01"}}</td>
+              <td>{{.Series}}</td>
+              <td>{{.Bugs}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p>No data available yet.</p>
+        {{end}}
+      </div>
+    </main>
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script type="text/javascript">
+      google.charts.load('current', {'packages':['corechart']});
+      google.charts.setOnLoadCallback(drawAllCharts);
+
+      const processedData = [
+        {{range .Processed}}
+          [new Date({{.Date.Format "2006-01-02"}}), {{.Count}}],
+        {{end}}
+      ];
+
+      const findingsData = [
+        {{range .Findings}}
+          [new Date({{.Date.Format "2006-01-02"}}), {{.Count}}],
+        {{end}}
+      ];
+
+      const delayData = [
+        {{range .Delay}}
+          [new Date({{.Date.Format "2006-01-02"}}), {{.DelayHours}}],
+        {{end}}
+      ];
+
+      const distributionData = [
+        {{range .Distribution}}
+          [new Date({{.Date.Format "2006-01-02"}}), {{.Finished}}, {{.Skipped}}, {{.WithFailedSteps}}, {{.WithSkippedSteps}}],
+        {{end}}
+      ];
+
+      const reportsData = [
+        {{range .Reports}}
+          [new Date({{.Date.Format "2006-01-02"}}), {{.Count}}],
+        {{end}}
+      ];
+
+      function drawAllCharts() {
+        drawChart('processed_chart_div', processedData, '#007bff');
+        drawChart('findings_chart_div', findingsData, '#dc3545');
+        drawChart('reports_chart_div', reportsData, '#dc3545');
+        drawChart('avg_wait_chart_div', delayData, 'black');
+        drawDistributionChart();
+      }
+
+      function drawChart(chartDivId, chartData, chartColor) {
+        const data = new google.visualization.DataTable();
+        data.addColumn('date', 'Date');
+        data.addColumn('number', 'Count');
+        data.addRows(chartData);
+        const options = {
+          legend: { position: 'none' },
+          hAxis: { title: 'Date', format: 'MMM dd, yyyy', gridlines: { color: 'transparent' } },
+          vAxis: { title: 'Count', minValue: 0 },
+          colors: [chartColor],
+          explorer: {
+            actions: ['dragToZoom', 'rightClickToReset'],
+            axis: 'horizontal',
+            keepInBounds: true,
+            maxZoomIn: 4.0
+          }
+        };
+
+        const chart = new google.visualization.LineChart(document.getElementById(chartDivId));
+        chart.draw(data, options);
+      }
+
+      function drawDistributionChart() {
+        const data = new google.visualization.DataTable();
+        data.addColumn('date', 'Date');
+        data.addColumn('number', 'Processed');
+        data.addColumn('number', 'Skipped');
+        data.addColumn('number', 'Some steps failed');
+        data.addColumn('number', 'Some steps skipped');
+        data.addRows(distributionData);
+        const options = {
+          isStacked: 'percent',
+          legend: { position: 'top', maxLines: 2 },
+          hAxis: { title: 'Date', format: 'MMM dd, yyyy', gridlines: { color: 'transparent' } },
+          vAxis: {
+            minValue: 0,
+            format: '#%'
+          },
+          colors: ['#28a745', '#ffc107', '#ffcccb', '#d5f0c0'],
+          areaOpacity: 0.8
+        };
+        const chart = new google.visualization.AreaChart(document.getElementById('distribution_chart_div'));
+        chart.draw(data, options);
+    }
+    </script>
+{{end}}

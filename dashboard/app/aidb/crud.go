@@ -1,0 +1,490 @@
+// Copyright 2025 syzkaller project authors. All rights reserved.
+// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+package aidb
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
+
+	"errors"
+
+	"cloud.google.com/go/spanner"
+	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/aflow/trajectory"
+	"github.com/google/uuid"
+	"google.golang.org/appengine/v2"
+)
+
+const (
+	Instance = "syzbot"
+	Database = "ai"
+)
+
+var ErrNotFound = errors.New("entity not found")
+
+func init() {
+	// This forces unmarshalling of JSON integers into json.Number rather than float64.
+	spanner.UseNumberWithJSONDecoderEncoder(true)
+}
+
+func LoadActiveWorkflows(ctx context.Context) ([]*ActiveWorkflow, error) {
+	return selectAll[ActiveWorkflow](ctx, spanner.Statement{
+		SQL: `SELECT Name, Type, MAX(Agents.LastActive) AS LastActive
+			FROM Workflows JOIN Agents USING(AgentName)
+			GROUP BY Name, Type`,
+	})
+}
+
+func UpdateWorkflows(ctx context.Context, agentName string, active []dashapi.AIWorkflow) error {
+	client, err := dbClient(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		var mutations []*spanner.Mutation
+		mutations = append(mutations, spanner.Delete("Workflows", spanner.KeyRange{
+			Start: spanner.Key{agentName},
+			End:   spanner.Key{agentName},
+			Kind:  spanner.ClosedClosed,
+		}))
+		for _, f := range active {
+			flow := &Workflow{
+				AgentName: agentName,
+				Name:      f.Name,
+				Type:      f.Type,
+			}
+			mut, err := spanner.InsertStruct("Workflows", flow)
+			if err != nil {
+				return err
+			}
+			mutations = append(mutations, mut)
+		}
+		if len(mutations) == 0 {
+			return nil
+		}
+		return txn.BufferWrite(mutations)
+	})
+	return err
+}
+
+func AgentIsAlive(ctx context.Context, agentName string) error {
+	client, err := dbClient(ctx)
+	if err != nil {
+		return err
+	}
+	mut, err := spanner.InsertOrUpdateStruct("Agents", &Agent{
+		AgentName:  agentName,
+		LastActive: TimeNow(ctx),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = client.Apply(ctx, []*spanner.Mutation{mut})
+	return err
+}
+
+func LoadAgent(ctx context.Context, agentName string) (*Agent, error) {
+	return selectOne[Agent](ctx, spanner.Statement{
+		SQL: selectAgents() + `WHERE AgentName = @name`,
+		Params: map[string]any{
+			"name": agentName,
+		},
+	})
+}
+
+func CreateJob(ctx context.Context, job *Job) (string, error) {
+	job.ID = uuid.NewString()
+	job.Created = TimeNow(ctx)
+	client, err := dbClient(ctx)
+	if err != nil {
+		return "", err
+	}
+	mut, err := spanner.InsertStruct("Jobs", job)
+	if err != nil {
+		return "", err
+	}
+	_, err = client.Apply(ctx, []*spanner.Mutation{mut})
+	return job.ID, err
+}
+
+func UpdateJob(ctx context.Context, job *Job) error {
+	client, err := dbClient(ctx)
+	if err != nil {
+		return err
+	}
+	mut, err := spanner.UpdateStruct("Jobs", job)
+	if err != nil {
+		return err
+	}
+	_, err = client.Apply(ctx, []*spanner.Mutation{mut})
+	return err
+}
+
+func startJob(ctx context.Context, req *dashapi.AIJobPollReq, job *Job) (*spanner.Mutation, error) {
+	job.Started = spanner.NullTime{Time: TimeNow(ctx), Valid: true}
+	job.CodeRevision = req.CodeRevision
+	job.AgentName = toNullString(req.AgentName)
+	return spanner.InsertOrUpdateStruct("Jobs", job)
+}
+
+func cloneJob(ctx context.Context, orig *Job) *Job {
+	return &Job{
+		ID:          uuid.NewString(),
+		Created:     TimeNow(ctx),
+		Type:        orig.Type,
+		Workflow:    orig.Workflow,
+		Namespace:   orig.Namespace,
+		BugID:       orig.BugID,
+		Description: orig.Description,
+		Link:        orig.Link,
+		Args:        orig.Args,
+	}
+}
+
+func StartJob(ctx context.Context, req *dashapi.AIJobPollReq) (*Job, error) {
+	var workflows []string
+	for _, flow := range req.Workflows {
+		workflows = append(workflows, flow.Name)
+	}
+	client, err := dbClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var job *Job
+	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		iter := txn.Query(ctx, spanner.Statement{
+			SQL: selectJobs() + `WHERE Workflow IN UNNEST(@workflows)
+					AND Started IS NULL
+				ORDER BY Created ASC LIMIT 1`,
+			Params: map[string]any{
+				"workflows": workflows,
+			},
+		})
+		defer iter.Stop()
+		var jobs []*Job
+		if err := spanner.SelectAll(iter, &jobs); err != nil || len(jobs) == 0 {
+			return err
+		}
+		job = jobs[0]
+		mut, err := startJob(ctx, req, job)
+		if err != nil {
+			return err
+		}
+		return txn.BufferWrite([]*spanner.Mutation{mut})
+	})
+	return job, err
+}
+
+func NextStaleJob(ctx context.Context, req *dashapi.AIJobPollReq) (*Job, error) {
+	var workflows []string
+	for _, flow := range req.Workflows {
+		workflows = append(workflows, flow.Name)
+	}
+	client, err := dbClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := TimeNow(ctx).Add(-8 * time.Hour)
+	var job *Job
+	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		var jobs []*Job
+
+		// First, check if the requesting agent has any unfinished jobs (implying a restart).
+		if req.AgentName != "" {
+			iter := txn.Query(ctx, spanner.Statement{
+				SQL: selectJobs() + ` WHERE Started IS NOT NULL AND Finished IS NULL
+					AND AgentName = @agentName AND Workflow IN UNNEST(@workflows) LIMIT 1`,
+				Params: map[string]any{
+					"agentName": req.AgentName,
+					"workflows": workflows,
+				},
+			})
+			defer iter.Stop()
+			if err := spanner.SelectAll(iter, &jobs); err != nil {
+				return err
+			}
+		}
+
+		// Check if any other agent has stale/abandoned jobs.
+		if len(jobs) == 0 {
+			iter := txn.Query(ctx, spanner.Statement{
+				SQL: selectJobs() + ` JOIN Agents USING(AgentName)
+					WHERE Started IS NOT NULL AND Finished IS NULL
+					AND LastActive <= @cutoff AND Workflow IN UNNEST(@workflows) LIMIT 1`,
+				Params: map[string]any{
+					"cutoff":    cutoff,
+					"workflows": workflows,
+				},
+			})
+			defer iter.Stop()
+			if err := spanner.SelectAll(iter, &jobs); err != nil {
+				return err
+			}
+		}
+
+		if len(jobs) == 0 {
+			return nil
+		}
+
+		origJob := jobs[0]
+
+		// Fail the original job.
+		origJob.Finished = spanner.NullTime{Time: TimeNow(ctx), Valid: true}
+		origJob.Aborted = true
+		if origJob.AgentName.StringVal == req.AgentName {
+			origJob.Error = "Aborted: assigned agent restarted"
+		} else {
+			origJob.Error = "Aborted: assigned agent has been inactive for too long"
+		}
+
+		mut, err := spanner.UpdateStruct("Jobs", origJob)
+		if err != nil {
+			return err
+		}
+		if err := txn.BufferWrite([]*spanner.Mutation{mut}); err != nil {
+			return err
+		}
+
+		job = cloneJob(ctx, origJob)
+		mut, err = startJob(ctx, req, job)
+		if err != nil {
+			return err
+		}
+		return txn.BufferWrite([]*spanner.Mutation{mut})
+	})
+	return job, err
+}
+
+type JobFilter struct {
+	Workflow    string
+	ShowAborted bool
+}
+
+func LoadNamespaceJobs(ctx context.Context, ns string, filter *JobFilter) ([]*Job, error) {
+	sql := selectJobs() + "WHERE Namespace = @ns"
+	params := map[string]any{
+		"ns": ns,
+	}
+	if filter == nil {
+		filter = &JobFilter{}
+	}
+	switch filter.Workflow {
+	case "", WorkflowAll:
+		// No filtering by workflow.
+	case WorkflowNeedsModeration:
+		sql += " AND Type = Workflow AND Finished IS NOT NULL AND Error = '' AND Correct IS NULL"
+	default:
+		sql += " AND Workflow = @workflow"
+		params["workflow"] = filter.Workflow
+	}
+	if !filter.ShowAborted {
+		sql += " AND NOT Aborted"
+	}
+	sql += " ORDER BY Created DESC"
+	return selectAll[Job](ctx, spanner.Statement{
+		SQL:    sql,
+		Params: params,
+	})
+}
+
+func LoadBugJobs(ctx context.Context, bugID string) ([]*Job, error) {
+	return selectAll[Job](ctx, spanner.Statement{
+		SQL: selectJobs() + `WHERE BugID = @bugID ORDER BY Created DESC`,
+		Params: map[string]any{
+			"bugID": bugID,
+		},
+	})
+}
+
+func LoadJob(ctx context.Context, id string) (*Job, error) {
+	return selectOne[Job](ctx, spanner.Statement{
+		SQL: selectJobs() + `WHERE ID = @id`,
+		Params: map[string]any{
+			"id": id,
+		},
+	})
+}
+
+func StoreTrajectorySpan(ctx context.Context, jobID string, span *trajectory.Span) error {
+	client, err := dbClient(ctx)
+	if err != nil {
+		return err
+	}
+	ent := TrajectorySpan{
+		JobID:                jobID,
+		Seq:                  int64(span.Seq),
+		Nesting:              int64(span.Nesting),
+		Type:                 string(span.Type),
+		Name:                 span.Name,
+		Model:                span.Model,
+		Started:              span.Started,
+		Finished:             toNullTime(span.Finished),
+		Error:                toNullString(span.Error),
+		Args:                 toNullJSON(span.Args),
+		Results:              toNullJSON(span.Results),
+		Instruction:          toNullString(span.Instruction),
+		Prompt:               toNullString(span.Prompt),
+		Reply:                toNullString(span.Reply),
+		Thoughts:             toNullString(span.Thoughts),
+		InputTokens:          toNullInt64(span.InputTokens),
+		OutputTokens:         toNullInt64(span.OutputTokens),
+		OutputThoughtsTokens: toNullInt64(span.OutputThoughtsTokens),
+	}
+	mut, err := spanner.InsertOrUpdateStruct("TrajectorySpans", ent)
+	if err != nil {
+		return err
+	}
+	_, err = client.Apply(ctx, []*spanner.Mutation{mut})
+	return err
+}
+
+func LoadTrajectory(ctx context.Context, jobID string) ([]*TrajectorySpan, error) {
+	return selectAll[TrajectorySpan](ctx, spanner.Statement{
+		SQL: selectTrajectorySpans() + `WHERE JobID = @job_id ORDER BY Seq ASC`,
+		Params: map[string]any{
+			"job_id": jobID,
+		},
+	})
+}
+
+func selectAll[T any](ctx context.Context, stmt spanner.Statement) ([]*T, error) {
+	client, err := dbClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	iter := client.Single().Query(ctx, stmt)
+	defer iter.Stop()
+	var items []*T
+	err = spanner.SelectAll(iter, &items)
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func selectOne[T any](ctx context.Context, stmt spanner.Statement) (*T, error) {
+	all, err := selectAll[T](ctx, stmt)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(all) > 1 {
+		return nil, fmt.Errorf("selectOne: got %v of %T", len(all), *new(T))
+	}
+	return all[0], nil
+}
+
+var clients sync.Map // map[string]*spanner.Client
+
+func dbClient(ctx context.Context) (*spanner.Client, error) {
+	appID := appengine.AppID(ctx)
+	if v, ok := clients.Load(appID); ok {
+		return v.(*spanner.Client), nil
+	}
+	path := fmt.Sprintf("projects/%v/instances/%v/databases/%v",
+		appID, Instance, Database)
+	// We use background context for the client, so that it survives the request.
+	client, err := spanner.NewClientWithConfig(context.Background(), path, spanner.ClientConfig{})
+	if err != nil {
+		return nil, err
+	}
+	if actual, loaded := clients.LoadOrStore(appID, client); loaded {
+		client.Close()
+		return actual.(*spanner.Client), nil
+	}
+	return client, nil
+}
+
+func CloseClient(ctx context.Context) {
+	appID := appengine.AppID(ctx)
+	if v, ok := clients.LoadAndDelete(appID); ok {
+		v.(*spanner.Client).Close()
+	}
+}
+
+var TimeNow = func(ctx context.Context) time.Time {
+	return time.Now()
+}
+
+func selectAgents() string {
+	return selectAllFrom[Agent]("Agents")
+}
+
+func selectJobs() string {
+	return selectAllFrom[Job]("Jobs")
+}
+
+func selectTrajectorySpans() string {
+	return selectAllFrom[TrajectorySpan]("TrajectorySpans")
+}
+
+func selectJournal() string {
+	return selectAllFrom[Journal]("Journal")
+}
+
+func AddJournalEntry(ctx context.Context, entry *Journal) error {
+	entry.ID = uuid.NewString()
+	client, err := dbClient(ctx)
+	if err != nil {
+		return err
+	}
+	mut, err := spanner.InsertStruct("Journal", entry)
+	if err != nil {
+		return err
+	}
+	_, err = client.Apply(ctx, []*spanner.Mutation{mut})
+	return err
+}
+
+func LoadJobJournal(ctx context.Context, jobID, action string) ([]*Journal, error) {
+	return selectAll[Journal](ctx, spanner.Statement{
+		SQL: selectJournal() + `WHERE JobID = @jobID AND Action = @action ORDER BY Date DESC`,
+		Params: map[string]any{
+			"jobID":  jobID,
+			"action": action,
+		},
+	})
+}
+
+func selectAllFrom[T any](table string) string {
+	var fields []string
+	for _, field := range reflect.VisibleFields(reflect.TypeFor[T]()) {
+		fields = append(fields, field.Name)
+	}
+	return fmt.Sprintf("SELECT %v FROM %v ", strings.Join(fields, ", "), table)
+}
+
+func toNullJSON(v map[string]any) spanner.NullJSON {
+	if v == nil {
+		return spanner.NullJSON{}
+	}
+	return spanner.NullJSON{Value: v, Valid: true}
+}
+
+func toNullTime(v time.Time) spanner.NullTime {
+	if v.IsZero() {
+		return spanner.NullTime{}
+	}
+	return spanner.NullTime{Time: v, Valid: true}
+}
+
+func toNullString(v string) spanner.NullString {
+	if v == "" {
+		return spanner.NullString{}
+	}
+	return spanner.NullString{StringVal: v, Valid: true}
+}
+
+func toNullInt64(v int) spanner.NullInt64 {
+	if v == 0 {
+		return spanner.NullInt64{}
+	}
+	return spanner.NullInt64{Int64: int64(v), Valid: true}
+}

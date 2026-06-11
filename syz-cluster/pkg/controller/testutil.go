@@ -1,0 +1,198 @@
+// Copyright 2025 syzkaller project authors. All rights reserved.
+// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+package controller
+
+import (
+	"context"
+	"fmt"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/google/syzkaller/syz-cluster/pkg/api"
+	"github.com/google/syzkaller/syz-cluster/pkg/app"
+	"github.com/google/syzkaller/syz-cluster/pkg/db"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type EntityIDs struct {
+	SeriesID  string
+	SessionID string
+}
+
+// UploadTestSeries returns a (series ID, session ID) tuple.
+func UploadTestSeries(t *testing.T, ctx context.Context,
+	client *api.Client, series *api.Series) EntityIDs {
+	retSeries, err := client.UploadSeries(ctx, series)
+	assert.NoError(t, err)
+	retSession, err := client.UploadSession(ctx, &api.NewSession{
+		ExtID: series.ExtID,
+	})
+	assert.NoError(t, err)
+	return EntityIDs{
+		SeriesID:  retSeries.ID,
+		SessionID: retSession.ID,
+	}
+}
+
+func UploadTestBuild(t *testing.T, ctx context.Context, client *api.Client,
+	build *api.Build) *api.UploadBuildResp {
+	ret, err := client.UploadBuild(ctx, &api.UploadBuildReq{
+		Build:  *build,
+		Log:    []byte("build log"),
+		Config: []byte("build config"),
+	})
+	assert.NoError(t, err)
+	assert.NotEmpty(t, ret.ID)
+	return ret
+}
+
+func TestServer(t *testing.T, env *app.AppEnvironment) *api.Client {
+	apiServer := NewAPIServer(env)
+	server := httptest.NewServer(apiServer.Mux())
+	t.Cleanup(server.Close)
+	return api.NewClient(server.URL)
+}
+
+func DummySeries() *api.Series {
+	return &api.Series{
+		ExtID: "ext-id",
+		Title: "test series name",
+		Link:  "http://link/to/series",
+		Cc:    []string{"first@user.com", "second@user.com"},
+		Patches: []api.SeriesPatch{
+			{
+				Seq:   1,
+				Title: "first patch title",
+				Body:  []byte("first content"),
+			},
+		},
+	}
+}
+
+func DummyBuild() *api.Build {
+	return &api.Build{
+		Arch:       "amd64",
+		TreeName:   "mainline",
+		TreeURL:    "https://git/repo",
+		ConfigName: "config",
+		CommitHash: "abcd",
+		Compiler:   "compiler",
+	}
+}
+
+func DummyFindings() []*api.RawFinding {
+	var findings []*api.RawFinding
+	for i := 0; i < 2; i++ {
+		findings = append(findings, &api.RawFinding{
+			Title:    fmt.Sprintf("finding %d", i),
+			TestName: "test",
+			Report:   []byte(fmt.Sprintf("report %d", i)),
+			Log:      []byte(fmt.Sprintf("log %d", i)),
+			SyzRepro: []byte(fmt.Sprintf("log %d", i)),
+			CRepro:   []byte(fmt.Sprintf("log %d", i)),
+		})
+	}
+	return findings
+}
+
+type SeriesWithFindingIDs struct {
+	EntityIDs
+	BaseBuildID    string
+	PatchedBuildID string
+}
+
+func FakeSeriesWithFindings(t *testing.T, ctx context.Context, env *app.AppEnvironment,
+	client *api.Client, series *api.Series) SeriesWithFindingIDs {
+	ids := UploadTestSeries(t, ctx, client, series)
+	baseBuild := UploadTestBuild(t, ctx, client, DummyBuild())
+	patchedBuild := UploadTestBuild(t, ctx, client, DummyBuild())
+	err := client.UploadSessionTest(ctx, &api.SessionTest{
+		SessionID:      ids.SessionID,
+		BaseBuildID:    baseBuild.ID,
+		PatchedBuildID: patchedBuild.ID,
+		TestName:       "test",
+		Result:         api.TestRunning,
+	})
+	assert.NoError(t, err)
+
+	findings := DummyFindings()
+	for _, finding := range findings {
+		finding.SessionID = ids.SessionID
+		err = client.UploadFinding(ctx, finding)
+		assert.NoError(t, err)
+	}
+	StartSession(t, env, ids.SessionID)
+	MarkSessionFinished(t, env, ids.SessionID)
+	return SeriesWithFindingIDs{
+		EntityIDs:      ids,
+		BaseBuildID:    baseBuild.ID,
+		PatchedBuildID: patchedBuild.ID,
+	}
+}
+
+func StartSession(t *testing.T, env *app.AppEnvironment, sessionID string) {
+	repo := db.NewSessionRepository(env.Spanner)
+	err := repo.Start(context.Background(), sessionID)
+	assert.NoError(t, err)
+}
+
+func MarkSessionFinished(t *testing.T, env *app.AppEnvironment, sessionID string) {
+	repo := db.NewSessionRepository(env.Spanner)
+	err := repo.Update(context.Background(), sessionID, func(session *db.Session) error {
+		if session.StartedAt.IsNull() {
+			session.SetStartedAt(time.Now())
+		}
+		session.SetFinishedAt(time.Now())
+		return nil
+	})
+	assert.NoError(t, err)
+}
+
+// TODO: this is temporary.
+// We need to move pkg/controller/api_test.go and pkg/reporter/api_test.go to some other
+// place, so that we can always use both API servers in the tests.
+func UploadTestSessionReport(t *testing.T, env *app.AppEnvironment,
+	sessionID string) *db.SessionReport {
+	reportRepo := db.NewReportRepository(env.Spanner)
+	report := &db.SessionReport{
+		ID:        uuid.NewString(),
+		SessionID: sessionID,
+		Reporter:  "test-reporter",
+	}
+	require.NoError(t, reportRepo.Insert(context.Background(), report))
+	return report
+}
+
+// FakeJobSession uploads a fake test and step via the provided client,
+// and marks the given session as finished in the DB.
+func FakeJobSession(t *testing.T, env *app.AppEnvironment, client *api.Client, sessionID string) string {
+	ctx := context.Background()
+	err := client.UploadSessionTest(ctx, &api.SessionTest{
+		SessionID: sessionID,
+		TestName:  "build",
+		Result:    api.TestPassed,
+	})
+	require.NoError(t, err)
+
+	err = client.UploadSessionTest(ctx, &api.SessionTest{
+		SessionID: sessionID,
+		TestName:  "run repros",
+		Result:    api.TestPassed,
+	})
+	require.NoError(t, err)
+
+	err = client.UploadTestStep(ctx, sessionID, &api.SessionTestStep{
+		TestName: "run repros",
+		Title:    "repro A",
+		Target:   api.StepTargetPatched,
+		Result:   api.StepResultPassed,
+	})
+	require.NoError(t, err)
+
+	MarkSessionFinished(t, env, sessionID)
+	return sessionID
+}

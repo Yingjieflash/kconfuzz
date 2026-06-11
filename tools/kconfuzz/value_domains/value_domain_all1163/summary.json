@@ -1,0 +1,86 @@
+{
+  "confidence_counts": {
+    "high": 166,
+    "low": 593,
+    "medium": 404
+  },
+  "domain_kind_counts": {
+    "bitmask_flags": 13,
+    "bool_like_candidate": 112,
+    "bool_like_int": 270,
+    "bounded_numeric": 125,
+    "bounded_numeric_taint": 22,
+    "enum_unknown": 3,
+    "one_way_bool": 2,
+    "small_enum_int": 9,
+    "strict_bool": 86,
+    "string_unknown": 28,
+    "unbounded_numeric": 355,
+    "unbounded_numeric_taint": 138
+  },
+  "empty_pool_policy": "renormalize_available_pools_per_param",
+  "mirror_dirs": [
+    "/home/wang/syzkaller_workdir/direct_syzkaller_relation_repro/data/runtime_param_mutation/value_domain_all1163",
+    "/home/wang/syzkaller_workdir/syzkaller_kconfuzz_exec/tools/kconfuzz/value_domains/value_domain_all1163"
+  ],
+  "missing_value_domain_count": 0,
+  "missing_value_domain_examples": [],
+  "mutation_enabled_count": 1101,
+  "outputs": {
+    "all": "value_domain_workspace/runs/clang18_fuzz_full_current/value_domains_new_only1163/mutation_domains_value_domain_all1163/runtime_param_mutation_domains.jsonl",
+    "enabled": "value_domain_workspace/runs/clang18_fuzz_full_current/value_domains_new_only1163/mutation_domains_value_domain_all1163/runtime_param_mutation_domains.enabled.jsonl",
+    "readme": "value_domain_workspace/runs/clang18_fuzz_full_current/value_domains_new_only1163/mutation_domains_value_domain_all1163/README.md",
+    "simple": "value_domain_workspace/runs/clang18_fuzz_full_current/value_domains_new_only1163/mutation_domains_value_domain_all1163/parameter_mutator_table.simple.jsonl",
+    "summary": "value_domain_workspace/runs/clang18_fuzz_full_current/value_domains_new_only1163/mutation_domains_value_domain_all1163/summary.json"
+  },
+  "param_functions": null,
+  "param_source": "all_value_domains",
+  "pool_available_counts": {
+    "out_of_domain_probe_values": 652,
+    "random_legal_values": 1099,
+    "seed_values": 1101,
+    "tfuzz_semantic_values": 519
+  },
+  "random_legal_mode_counts": {
+    "bounded_range": 93,
+    "disabled": 61,
+    "explicit_values": 478,
+    "lower_bounded_type_range": 77,
+    "numeric_type_range": 443,
+    "unsupported_enum": 3,
+    "upper_bounded_type_range": 8
+  },
+  "record_count": 1163,
+  "requested_param_count": 1163,
+  "schema_version": "runtime-param-mutation-v1",
+  "simple_record_count": 1101,
+  "simple_weight_pattern_counts": {
+    "0/33/58/9": 266,
+    "0/36/64/0": 315,
+    "0/80/0/20": 1,
+    "40/20/35/5": 384,
+    "42/21/37/0": 134,
+    "62/31/0/7": 1
+  },
+  "skip_reason_counts": {
+    "no_available_mutation_pool": 1,
+    "not_eligible_for_online_mutation": 31,
+    "one_way_irreversible": 2,
+    "unsupported_string_domain": 28
+  },
+  "status": "completed",
+  "target_weights_percent": {
+    "out_of_domain_probe_values": 5,
+    "random_legal_values": 35,
+    "seed_values": 20,
+    "tfuzz_semantic_values": 40
+  },
+  "value_domains": "value_domain_workspace/runs/clang18_fuzz_full_current/value_domains_new_only1163/parameter_value_domains.final.jsonl",
+  "value_family_counts": {
+    "bitmask": 13,
+    "bool": 470,
+    "enum": 12,
+    "numeric": 640,
+    "string": 28
+  }
+}

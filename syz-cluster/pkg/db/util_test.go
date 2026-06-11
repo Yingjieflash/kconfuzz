@@ -1,0 +1,106 @@
+// Copyright 2025 syzkaller project authors. All rights reserved.
+// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+package db
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"cloud.google.com/go/spanner"
+	"github.com/google/syzkaller/syz-cluster/pkg/api"
+	"github.com/stretchr/testify/assert"
+)
+
+type dummyTestData struct {
+	t      *testing.T
+	ctx    context.Context
+	client *spanner.Client
+}
+
+func (d *dummyTestData) addSessionTest(session *Session, names ...string) {
+	testsRepo := NewSessionTestRepository(d.client)
+	for _, name := range names {
+		err := testsRepo.InsertOrUpdate(d.ctx, &SessionTest{
+			SessionID: session.ID,
+			TestName:  name,
+			Result:    api.TestPassed,
+		}, nil)
+		assert.NoError(d.t, err)
+	}
+}
+
+func (d *dummyTestData) dummySeries() *Series {
+	seriesRepo := NewSeriesRepository(d.client)
+	series := &Series{ExtID: "series-ext-id"}
+	err := seriesRepo.Insert(d.ctx, series, nil)
+	assert.NoError(d.t, err)
+	return series
+}
+
+func (d *dummyTestData) dummySession(series *Series) *Session {
+	sessionRepo := NewSessionRepository(d.client)
+	session := &Session{
+		SeriesID:  series.ID,
+		CreatedAt: time.Now(),
+	}
+	err := sessionRepo.Insert(d.ctx, session)
+	assert.NoError(d.t, err)
+	return session
+}
+
+func (d *dummyTestData) startSession(session *Session) {
+	sessionRepo := NewSessionRepository(d.client)
+	err := sessionRepo.Start(d.ctx, session.ID)
+	assert.NoError(d.t, err)
+}
+
+func (d *dummyTestData) finishSession(session *Session) {
+	sessionRepo := NewSessionRepository(d.client)
+	err := sessionRepo.Update(d.ctx, session.ID, func(session *Session) error {
+		session.SetFinishedAt(time.Now())
+		return nil
+	})
+	assert.NoError(d.t, err)
+}
+
+func (d *dummyTestData) setLatestSession(series *Series, session *Session) {
+	seriesRepo := NewSeriesRepository(d.client)
+	series.SetLatestSession(session)
+	err := seriesRepo.Update(d.ctx, series.ID, func(s *Series) error {
+		s.SetLatestSession(session)
+		return nil
+	})
+	assert.NoError(d.t, err)
+}
+
+func (d *dummyTestData) dummyReport(session *Session) *SessionReport {
+	reportRepo := NewReportRepository(d.client)
+	report := &SessionReport{
+		SessionID: session.ID,
+		Reporter:  "dummy-reporter",
+	}
+	err := reportRepo.Insert(d.ctx, report)
+	assert.NoError(d.t, err)
+	return report
+}
+
+func (d *dummyTestData) addFinding(session *Session, title, test string) *Finding {
+	findingRepo := NewFindingRepository(d.client)
+	finding := &Finding{
+		SessionID: session.ID,
+		Title:     title,
+		TestName:  test,
+	}
+	assert.NoError(d.t, findingRepo.mustStore(d.ctx, finding))
+	return finding
+}
+
+func (d *dummyTestData) invalidateFinding(f *Finding) {
+	findingRepo := NewFindingRepository(d.client)
+	assert.NoError(d.t, findingRepo.Update(d.ctx, f.ID, func(f *Finding) error {
+		f.SetInvalidatedAt(time.Now())
+		return nil
+	}))
+}
