@@ -34,7 +34,7 @@ the runner can build sequence-level actions from a direct
 `runtime parameter -> syzkaller call descriptor` JSONL table:
 
 ```text
-SYZ_KCONFUZZ_RELATION_TABLE=/path/to/param_syzkaller_call_relation.positive.jsonl
+SYZ_KCONFUZZ_RELATION_TABLE=tools/kconfuzz/relations/linked_exact_965/param_syzkaller_call_relation.executor_current.jsonl
 ```
 
 The planner lives in `pkg/kconfuzz`. It intentionally keeps only rows where the

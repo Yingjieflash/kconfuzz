@@ -17,7 +17,11 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_TEMPLATE = BASE_DIR / "configs" / "paper_48h.cfg"
-DEFAULT_RELATION = BASE_DIR / "kconfuzz_smoke" / "relation_positive.jsonl"
+DEFAULT_RELATION = (
+    BASE_DIR
+    / "tools/kconfuzz/relations/linked_exact_965/"
+    / "param_syzkaller_call_relation.executor_current.jsonl"
+)
 EXECUTOR_LOG = Path("/tmp/syz-kconfuzz-config-actions.log")
 
 

@@ -1,0 +1,15 @@
+{
+  "schema": "kconfuzz_executor_current_relation_filter_v1",
+  "source_positive_jsonl": "/home/wang/syzkaller_workdir/direct_syzkaller_relation_repro/runs/direct_descriptor_linked_exact_965_pruned_current/param_syzkaller_call_relation.positive.jsonl",
+  "output_jsonl": "/home/wang/syzkaller_workdir/direct_syzkaller_relation_repro/runs/direct_descriptor_linked_exact_965_pruned_current/param_syzkaller_call_relation.executor_current.jsonl",
+  "raw_rows": 250731,
+  "kept_rows": 19223,
+  "loaded_calls": 125,
+  "loaded_params": 417,
+  "drops": {
+    "generic_descriptor": 201665,
+    "missing_param": 12108,
+    "unsafe_param": 17735
+  },
+  "note": "Matches current pkg/kconfuzz LoadRelationTable filters: known SupportedParams, AutoSafe, non-generic descriptor, param_domain == descriptor_domain."
+}

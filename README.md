@@ -32,6 +32,55 @@ More implementation notes are in [`KCONFUZZ_EXEC_PLAN.md`](KCONFUZZ_EXEC_PLAN.md
 The original syzkaller README is preserved at
 [`docs/syzkaller-upstream-readme.md`](docs/syzkaller-upstream-readme.md).
 
+## Data Tables
+
+The checked-in experiment data lives under `tools/kconfuzz/`:
+
+- `relations/linked_exact_965/`: syscall-to-runtime-config relation tables.
+  `param_syzkaller_call_relation.executor_current.jsonl` is the table used by
+  the fuzzer through `SYZ_KCONFUZZ_RELATION_TABLE`. It has 19,223 rows after
+  executor filtering. The full pre-filter positive table has 250,731 rows and
+  is stored as `param_syzkaller_call_relation.positive.jsonl.gz`.
+- `value_domains/value_domain_all1163/`: the broad value-domain and mutation
+  table for 1,163 runtime parameters. The compact mutator table has 1,101
+  mutation-enabled rows.
+- `value_domains/linked_exact_932/`: the value-domain and mutation table for
+  the 932 parameters selected by the linked-exact relation pipeline. The compact
+  mutator table has 900 mutation-enabled rows.
+- `value_domains/accurate458/`: the stricter table tied to the conservative
+  accurate-root set used during root-resolution validation.
+- `root_resolution/accurate458/`: root-resolution artifacts that map runtime
+  parameters back to LLVM/global/field roots before value-domain generation.
+
+The generated runtime registry is embedded in
+`pkg/kconfuzz/registry_gen.go` and `pkg/kconfuzz/registry_values_gen.go`.
+`pkg/kconfuzz/registry_gen.summary.json` records the current generated counts:
+1,110 supported runtime parameters, 1,067 `AutoSafe` parameters, and 1,090
+parameters with attached mutator metadata.
+
+### How The Tables Were Obtained
+
+1. Runtime sysctl inventory was collected from the fuzzing kernel under
+   `/proc/sys`, producing a runtime parameter list with names, procfs paths,
+   current values, handlers, and available type/range metadata.
+2. TFuzz/root-resolution output was used to map runtime parameters
+   to kernel LLVM roots and influenced functions. The `linked_exact_965`
+   snapshot contains 965 relation-ready roots before the later online-executor
+   safety filtering.
+3. Syzkaller Linux syscall descriptions were parsed into call descriptors and
+   descriptor entry functions. The relation pipeline compared each parameter's
+   influenced functions with each call descriptor's reachable functions. A
+   positive intersection produced one JSONL relation row.
+4. The full relation table was filtered for executor use by the same policy as
+   `pkg/kconfuzz.LoadRelationTable`: keep only supported parameters, keep only
+   `AutoSafe` parameters, drop generic descriptor domains, and require
+   `param_domain == descriptor_domain`.
+5. The mutation tables were generated from the runtime sysctl inventory,
+   inferred value domains, root-resolution confidence, and observed/current
+   values. Each row stores seed values, TFuzz semantic values, random legal
+   value ranges or explicit values, low-probability out-of-domain probes, and
+   the probability weights used by the runtime mutator.
+
 ## Build
 
 Install the normal syzkaller dependencies first: Go, a C/C++ compiler, make, and
@@ -90,7 +139,7 @@ Run a short local experiment:
 ```bash
 python3 scripts/run_kconfuzz_paper.py \
   --template-cfg configs/paper_48h.cfg \
-  --relation /path/to/param_syzkaller_call_relation.executor_current.jsonl \
+  --relation tools/kconfuzz/relations/linked_exact_965/param_syzkaller_call_relation.executor_current.jsonl \
   --duration-sec 300 \
   --sample-interval-sec 30 \
   --debug-kconfuzz
@@ -102,7 +151,7 @@ coverage samples, KConfuzz audit logs, and a final JSON summary.
 ## Main Runtime Knobs
 
 ```text
-SYZ_KCONFUZZ_RELATION_TABLE=/path/to/relation.jsonl
+SYZ_KCONFUZZ_RELATION_TABLE=tools/kconfuzz/relations/linked_exact_965/param_syzkaller_call_relation.executor_current.jsonl
 SYZ_KCONFUZZ_ACTION_STRATEGY=sequence|call|both
 SYZ_KCONFUZZ_MAX_ACTIONS=4
 SYZ_KCONFUZZ_MAX_ACTIONS_PER_CALL=1
@@ -128,10 +177,16 @@ The planner expects newline-delimited JSON records:
 {"param":"net/ipv4/tcp_autocorking","param_domain":"ipv4","syzkaller_call":"getsockopt$inet_int","descriptor_domain":"ipv4"}
 ```
 
-Automatic executor writes are intentionally conservative. The planner keeps
-only rows whose parameter exists in the generated registry, is marked
-`AutoSafe`, has a non-generic descriptor domain, and has matching
-`param_domain` and `descriptor_domain`.
+The checked-in executor table is:
+
+```text
+tools/kconfuzz/relations/linked_exact_965/param_syzkaller_call_relation.executor_current.jsonl
+```
+
+Automatic executor writes are intentionally conservative. The planner keeps only
+rows whose parameter exists in the generated registry, is marked `AutoSafe`, has
+a non-generic descriptor domain, and has matching `param_domain` and
+`descriptor_domain`.
 
 ## License
 

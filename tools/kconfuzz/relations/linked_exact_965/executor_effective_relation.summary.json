@@ -1,0 +1,24 @@
+{
+  "raw_rows": 250731,
+  "raw_params": 571,
+  "raw_calls": 1560,
+  "loaded_edges_effective_for_executor_actions": 19223,
+  "loaded_calls": 125,
+  "loaded_params": 417,
+  "drops": {
+    "generic_descriptor": 201665,
+    "missing_param": 12108,
+    "unsafe_param": 17735
+  },
+  "loaded_edges_by_param_domain": {
+    "ipv4": 11149,
+    "ipv6": 8074
+  },
+  "raw_pairs_by_param_descriptor_domain_top": {
+    "unsupported_param->generic": 105513,
+    "ipv4->generic": 65586,
+    "ipv6->generic": 59743,
+    "ipv4->ipv4": 11665,
+    "ipv6->ipv6": 8224
+  }
+}
